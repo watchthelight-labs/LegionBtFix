@@ -1,0 +1,31 @@
+name: Report
+description: A bug, or a report from another machine or macOS build
+body:
+  - type: input
+    id: machine
+    attributes:
+      label: Laptop model and Bluetooth controller
+      placeholder: Legion 5 15IAX10 (83F0), MT7925 (USB 0489:E111)
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: macOS build, OpenCore, Lilu, BlueToolFixup, MtkBt, LegionBtFix versions
+      placeholder: 26.7.1 (25G241), OC 1.0.8, Lilu 1.7.2, BlueToolFixup 2.7.2, MtkBt 0.2.0, LegionBtFix 0.2.0
+    validations:
+      required: true
+  - type: textarea
+    id: lbtfx
+    attributes:
+      label: Output of log show --last 10m --predicate 'eventMessage CONTAINS "lbtfx"'
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Crash reports in /Library/Logs/DiagnosticReports, the "BT clock" log lines, whether audio played and whether the HCI logging workaround was on.
+    validations:
+      required: true
