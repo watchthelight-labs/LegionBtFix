@@ -21,6 +21,8 @@ Legion 5 15IAX10, macOS 26.7.1 (25G241), OpenCore 1.0.8, Lilu 1.7.2, BlueToolFix
 | BT clock | `Failed to read BT clock` is gone from the log, and the A2DP stream's RTP timestamps are anchored (checked in the packet logger) |
 | AirPods audio | **plays, but only with a workaround** (below). Without it the stream starts and the link drops about 10 s after the first media packet |
 
+Also confirmed on an ASRock X870 Steel Legend WiFi (AMD RZ717 card, Bluetooth `0E8D:0717`, macOS 26.7.1 25G241, MtkBt 0.2.2), 2026-10-18: before the plugin, 13 `bluetoothd` crash reports in under three minutes and Bluetooth turning itself off seconds after it came up; with it, devices pair and audio plays. The page hashes are per `bluetoothd` build, not per machine, so any 25G241 Mac with an MT7925 gets the same fix.
+
 **The remaining problem is not fixed by this plugin.** With both patches in, music is heard in 3 of 3 runs when `bluetoothd`'s own HCI packet logging with raw audio is on, and in 0 of 3 runs when it is off. In the failing runs the controller stops reporting Number Of Completed Packets right after the first media packet, nothing comes back from the AirPods, 8 ACL packets (the controller's whole buffer) stay outstanding, and the link ends with Disconnection Complete reason 0x08 (connection timeout) about 10 s later. LE reports and HCI commands keep working meanwhile. The logging flag only changes how many payload bytes the packet logger copies, so the effect is timing or chance. The open lead is Wi-Fi and Bluetooth coexistence on the shared MT7925 radio (the Wi-Fi driver, MtkWlan, sends no coexistence information to the firmware).
 
 The workaround, which survives reboots and is applied by `bluetoothd` at start:
