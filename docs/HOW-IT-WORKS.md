@@ -42,7 +42,7 @@ So the link check is only a gate, and the values it guards are correct.
 100457c50  74 25        je    0x100457c77      ->   eb 25   jmp 0x100457c77
 ```
 
-Always take the success path. The Mac is central on the AirPods link (Role Discovery 0x00 in the trace), so the local clock is the piconet clock the stream is timed against. A non-zero HCI status still ends in 0x10044fe4e's own error branch. All three callers of `OI_HCI_ReadClock` with this callback go through the same block, so one byte covers them. Page at slice offset 0x457000 (fat 0x45b000), patch at in-page 0xc29 within a 51-byte window that is unique in the fat file, page SHA-1 `8ac81e18d6b1e039dd296826b8eb4987b8302481`.
+The block now always takes the success path. The Mac is central on the AirPods link (Role Discovery 0x00 in the trace), so the local clock is the piconet clock the stream is timed against. A non-zero HCI status still ends in 0x10044fe4e's own error branch. All three callers of `OI_HCI_ReadClock` with this callback go through the same block, so one byte covers them. Page at slice offset 0x457000 (fat 0x45b000), patch at in-page 0xc29 within a 51-byte window that is unique in the fat file, page SHA-1 `8ac81e18d6b1e039dd296826b8eb4987b8302481`.
 
 Other fixes considered: rewriting the handle in the reply at the transport (not possible; MtkBt lets go of the USB interface after the firmware download and `bluetoothd` reads HCI events from user space); patching `readClockCB` to keep the handle it asked for (the request carries a BD address, not a handle, so there is nothing to compare without more code); the firmware (MediaTek's, no change possible).
 
