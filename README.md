@@ -1,9 +1,5 @@
 # LegionBtFix
 
-> **Heads up:** a good portion of this code is AI generated. I do understand how it works,
-> and I'm happy to explain any of it. If something looks wrong or you have a question,
-> open an issue or ping me on Discord (`watchthelight`).
-
 A Lilu plugin that patches two instructions of `/usr/sbin/bluetoothd` in memory on macOS Tahoe 26.7.1 (25G241), for two things the MediaTek MT7925 Bluetooth controller does that `bluetoothd` does not expect. Nothing on disk changes. It only works on that exact build: on any other `bluetoothd` the page hashes do not match and the plugin does nothing.
 
 1. **`bluetoothd` crash loop on LE connections ("STATUS 718").** `bluetoothd` sends the legacy LE Create Connection (HCI 0x200D) with a random own address before it has ever set one. The MT7925 rejects that with 0x12 (Invalid HCI Command Parameters), as the Core spec says it should when no random address is set. `bluetoothd` treats the error as fatal, aborts, launchd restarts it, and the loop repeats every few seconds. The patch makes it always use the public address.
