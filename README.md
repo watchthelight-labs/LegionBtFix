@@ -9,7 +9,7 @@ The controller itself is brought up by [MtkBt](https://github.com/watchthelight-
 
 ## Status
 
-Legion 5 15IAX10, macOS 26.7.1 (25G241), OpenCore 1.0.8, Lilu 1.7.2, BlueToolFixup 2.7.2, MtkBt 0.2.0, AirPods Pro:
+Legion 5 15IAX10, macOS 26.7.1 (25G241), OpenCore 1.0.8, Lilu 1.7.2, BlueToolFixup 2.7.2, MtkBt 0.2.0 (0.2.4 is loaded there now; the runs below were on 0.2.0), AirPods Pro:
 
 | Patch | Result |
 |---|---|
