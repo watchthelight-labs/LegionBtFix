@@ -38,7 +38,7 @@ It makes `bluetoothd` write HCI traces with audio payloads to `/var/root/Library
 - It finds each patch site by a byte window around it, with the parts that change between builds masked, so it does not need a list of builds. A Tahoe update that changes the code around either site makes that patch silently stop applying; the window then needs re-taking (`docs/HOW-IT-WORKS.md` says how).
 - Side effects: LE connections from this Mac no longer use a random (private) address; `bluetoothd` stores the local clock for an A2DP stream even if the link it asked about is gone (it is the piconet clock while the Mac is central, which it is for headphones).
 - It does not fix the link drop described above.
-- Tested on one laptop with one controller.
+- Tested on two machines: the Legion 5 15IAX10 and one user's ASRock X870 desktop, both on 26.7.1 with 0.2.0 or earlier. 0.3.0 on 26.7.2 has only been checked on the Legion.
 
 ## Installation
 
@@ -60,7 +60,7 @@ It makes `bluetoothd` write HCI traces with audio payloads to `/var/root/Library
    log show --last 10m --predicate 'eventMessage CONTAINS "lbtfx"'
    ```
 
-   should show `LE own address forced to public` and, once audio starts, `BT clock accepted without link lookup`. No line at all on a new build means the code around the sites changed: no patch was applied. Then:
+   should show `LE own address forced to public` and, once audio starts, `BT clock accepted without link lookup`. On the Legion these Lilu lines never reach the unified log (not on 25G241 and not on 25G332), so a missing line proves nothing there. A surer check: with the plugin loaded, reading `/usr/sbin/bluetoothd` returns the patched pages (see docs/HOW-IT-WORKS.md), so on 25G332 the byte at file offset `0x45c140` reads `eb` and the three at `0x6d3b06` read `b1 01 90`. Then:
 
    ```
    ls /Library/Logs/DiagnosticReports | grep bluetoothd        # no new crash reports
@@ -85,7 +85,7 @@ tools/build-mac.sh                    # clones acidanthera/Lilu at 1.7.2 into ./
 LILU_KEXT=/path/to/Lilu.kext tools/build-mac.sh   # adds a check that every Lilu symbol the plugin needs is exported
 ```
 
-Needs the Xcode Command Line Tools. The build is reproducible: the 0.2.0 release binary (sha256 `3c330a217c47d398...`, full value in the release notes) is the file running on the test laptop, and a clean build of this tree with Apple clang 17 gives the same bytes.
+Needs the Xcode Command Line Tools. The build is meant to be reproducible: a clean build of the 0.2.0 tree with Apple clang 17 gave the same bytes as the 0.2.0 release binary (sha256 `3c330a217c47d398...`, full value in its release notes). The 0.3.0 release binary is the file running on the test laptop.
 
 `tools/` also holds three small parsers for `bluetoothd`'s `.pklg` packet logs (`pklg-summary.py`, `pklg-stream-timing.py`, `pklg-rtp-starts.py`), which is how the link drop above was measured.
 
