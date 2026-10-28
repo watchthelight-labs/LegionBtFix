@@ -2,8 +2,9 @@
 
 ## 0.3.0 (2026-10-28)
 
-- macOS 26.7.2 (25G332). Both patches now also match 25G332's `bluetoothd`, with that build's page hashes. The address window is byte-for-byte the same (it moved 0x1b0 bytes within its page). The clock window has new call and log-handle displacements. 25G241 stays supported. Taken from `bluetoothd` in Apple's full 25G332 OTA and checked page by page against the plugin's own matching logic. Not yet booted on 25G332.
-- Log lines name the build that matched (`bluetoothd 25G332: ...`).
+- No longer tied to one macOS build. Each patch is now a byte window with the parts that change between builds masked (call displacements, a stack slot, the `je` distance, the log handle), searched anywhere in each `bluetoothd` page, instead of fixed offsets plus a SHA-1 of the page. The windows match exactly once in both 26.7.1 (25G241) and 26.7.2 (25G332) `bluetoothd` and nowhere else in either file. A later Tahoe build where the code around either site changed gets no patch, as before.
+- Log lines give the page and the offset in it (`bluetoothd: ... (page 6d3000 +af2)`).
+- Not yet booted on 25G332.
 
 ## 0.2.0 (2026-10-17)
 

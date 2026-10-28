@@ -51,24 +51,24 @@ Other fixes considered: rewriting the handle in the reply at the transport (not 
 Each patch is applied only to a page that passes all of:
 
 - the vnode path is `/usr/sbin/bluetoothd` and the kernel is Tahoe 25.x (Lilu min and max kernel);
-- the bytes at the patch's in-page offset match its window exactly where the patched bytes are not; call and stack displacements, which change with every build, are part of the exact match. The patched bytes may be either the original or the patched form, so an already patched page is recognised and left alone;
-- the SHA-1 of the whole 4 KB page equals the one taken from 25G241 or 25G332. No such page holds a BlueToolFixup pattern (vendor check, chipset checks, NVRAM check, address check), so the hash is of untouched bytes whatever order the two plugins run in.
+- the page holds the patch's window (43 bytes for the address, 51 for the clock) at any offset. The bytes that change with every build are masked: the call displacements, the `[rbp-0x11c]` stack slot, the `je` distance and the RIP-relative log handle. Everything else, including the registers, is matched exactly. The patched bytes may be either the original or the patched form, so an already patched page is recognised and left alone. A run of 8 to 12 exact bytes is searched first, so pages of other files cost one short scan;
+- the window lies inside one 4 KB page (a window that crosses a page boundary is not found, and that patch is skipped on that build).
 
-Any other build fails one of those and the plugin does nothing. If only the window matches, it logs `page hash differs` so you know a re-take is needed.
+Neither window overlaps a BlueToolFixup pattern (vendor check, chipset checks, NVRAM check, address check), so the order the two plugins run in does not matter. Until 0.2.0 each patch was also tied to the SHA-1 of its 25G241 page; 0.3.0 dropped that, because the masked windows match exactly once in 25G241's and in 25G332's `bluetoothd` and nowhere else in either file.
 
 ## 25G332 (macOS 26.7.2)
 
-`bluetoothd` from Apple's full 25G332 OTA, file sha256 `c7eeb8ebd2cdbc43545453936d0ef19b5a61fd1f32cb99a4bf9208d4cd2031b5`, same size as 25G241's (23,555,568 bytes). The address window is unchanged byte for byte and sits at fat offset 0x6d3af2 (page 0x6d3000, in-page 0xaf2). The clock window is at 0x45c119 (page 0x45c000, in-page 0x119). Only the three call displacements and the RIP-relative log handle differ there, the called functions start with the same bytes as in 25G241, and the `je` still jumps 0x25 ahead. The patched bytes and offsets inside each window are the same as in 25G241.
+`bluetoothd` from Apple's full 25G332 OTA, file sha256 `c7eeb8ebd2cdbc43545453936d0ef19b5a61fd1f32cb99a4bf9208d4cd2031b5`, same size as 25G241's (23,555,568 bytes). The address window is unchanged byte for byte and sits at fat offset 0x6d3af2 (page 0x6d3000, in-page 0xaf2). The clock window is at 0x45c119 (page 0x45c000, in-page 0x119). Only the three call displacements and the RIP-relative log handle differ there (all masked), the called functions start with the same bytes as in 25G241, and the `je` still jumps 0x25 ahead. The patched bytes and offsets inside each window are the same as in 25G241.
 
 Reading `/usr/sbin/bluetoothd` on a running system with the plugin loaded can return the patched page, because the page cache holds the page as `_cs_validate_page` left it. Hash a copy from an installer or OTA, or put the original bytes back before hashing.
 
-## Re-taking the windows for another build
+## When a window stops matching
 
 1. `sha256sum /usr/sbin/bluetoothd`, then find the x86_64 slice offset with `otool -f`.
 2. Find the LE own address site: search the disassembly for the string "Still using random address to connect", find the function that calls its helper, and look for the `movzx ecx, al` right after the call, preceded by the `mov ecx, 0xff` stores.
 3. Find the BT clock site: search for "Failed to read BT clock", find the block that logs it, and look for the `test r14d, r14d ; je` pair (register may differ) right before the call to the store function.
-4. For each site, copy a window of 40 to 60 bytes that is unique in the whole fat file (check with a hex search), note the in-page offset, and take the SHA-1 of the 4 KB page containing it.
-5. Put the new values in `src/LegionBtFix.cpp`, bump the kernel gate if the major version changed, rebuild, and check the `lbtfx` log lines after boot.
+4. Only needed when the masked window no longer matches. Copy a window of 40 to 60 bytes, mask the displacements, and check that it matches exactly once in the whole fat file and that it does not cross a page boundary.
+5. Put the new window and mask in `src/LegionBtFix.cpp`, bump the kernel gate if the major version changed, rebuild, and check the `lbtfx` log lines after boot.
 
 ## How the patch is applied
 

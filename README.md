@@ -1,6 +1,6 @@
 # LegionBtFix
 
-A Lilu plugin that patches two instructions of `/usr/sbin/bluetoothd` in memory on macOS Tahoe 26.7.1 (25G241) and 26.7.2 (25G332), for two things the MediaTek MT7925 Bluetooth controller does that `bluetoothd` does not expect. Nothing on disk changes. It only works on those exact builds: on any other `bluetoothd` the page hashes do not match and the plugin does nothing.
+A Lilu plugin that patches two instructions of `/usr/sbin/bluetoothd` in memory on macOS Tahoe (tested on 26.7.1 25G241; the patterns also match 26.7.2 25G332), for two things the MediaTek MT7925 Bluetooth controller does that `bluetoothd` does not expect. Nothing on disk changes. It only works on those exact builds: on any other `bluetoothd` the page hashes do not match and the plugin does nothing.
 
 1. **`bluetoothd` crash loop on LE connections ("STATUS 718").** `bluetoothd` sends the legacy LE Create Connection (HCI 0x200D) with a random own address before it has ever set one. The MT7925 rejects that with 0x12 (Invalid HCI Command Parameters), as the Core spec says it should when no random address is set. `bluetoothd` treats the error as fatal, aborts, launchd restarts it, and the loop repeats every few seconds. The patch makes it always use the public address.
 2. **AirPods silent over A2DP ("Failed to read BT clock").** Before every AVDTP START, `bluetoothd` sends HCI Read Clock and the MT7925 answers with Connection_Handle 0x0000 instead of the handle it was asked about. `bluetoothd` finds no link for handle 0, logs the error and never stores the clock to host-time mapping the time-synced AAC-ELD stream needs, so the AirPods play nothing. The patch skips that link check; the clock values in the reply are correct, only the handle is wrong.
@@ -33,7 +33,7 @@ It makes `bluetoothd` write HCI traces with audio payloads to `/var/root/Library
 
 ## What it can't do
 
-- It is gated to the x86_64 `bluetoothd` of 25G241 and 25G332 by the exact byte window around each patch and the SHA-1 of the whole 4 KB page. Any macOS update changes `bluetoothd`, the patches silently stop applying, and the windows and hashes need re-taking (`docs/HOW-IT-WORKS.md` says how).
+- It finds each patch site by a byte window around it, with the parts that change between builds masked, so it does not need a list of builds. A Tahoe update that changes the code around either site makes that patch silently stop applying; the window then needs re-taking (`docs/HOW-IT-WORKS.md` says how).
 - Side effects: LE connections from this Mac no longer use a random (private) address; `bluetoothd` stores the local clock for an A2DP stream even if the link it asked about is gone (it is the piconet clock while the Mac is central, which it is for headphones).
 - It does not fix the link drop described above.
 - Tested on one laptop with one controller.
@@ -41,7 +41,7 @@ It makes `bluetoothd` write HCI traces with audio payloads to `/var/root/Library
 ## Installation
 
 1. Get `LegionBtFix.kext` from the [releases](../../releases), or build it (below).
-2. Add it to `config.plist`, `Kernel > Add`, after Lilu and after BlueToolFixup (both patch `bluetoothd`; the pages this plugin hashes hold none of BlueToolFixup's patterns, so the order only matters for Lilu):
+2. Add it to `config.plist`, `Kernel > Add`, after Lilu and after BlueToolFixup (both patch `bluetoothd`; the two windows overlap none of BlueToolFixup's patterns, so the order only matters for Lilu):
 
    ```
    BundlePath      LegionBtFix.kext
@@ -58,7 +58,7 @@ It makes `bluetoothd` write HCI traces with audio payloads to `/var/root/Library
    log show --last 10m --predicate 'eventMessage CONTAINS "lbtfx"'
    ```
 
-   should show `LE own address forced to public` and, once audio starts, `BT clock accepted without link lookup`. A `page hash differs` line means the pattern matched but the page is not one of the known builds: no patch was applied. Then:
+   should show `LE own address forced to public` and, once audio starts, `BT clock accepted without link lookup`. No line at all on a new build means the code around the sites changed: no patch was applied. Then:
 
    ```
    ls /Library/Logs/DiagnosticReports | grep bluetoothd        # no new crash reports
@@ -89,7 +89,7 @@ Needs the Xcode Command Line Tools. The build is reproducible: the 0.2.0 release
 
 ## How it works
 
-Like BlueToolFixup, the plugin routes the kernel's `_cs_validate_page` and looks at every page of `/usr/sbin/bluetoothd` as it is loaded. A page is patched only if the kernel is Tahoe, the file path matches, the bytes around the patch site match exactly, and the SHA-1 of the whole page equals the one taken from that build (25G241 or 25G332). The two patches are `movzx ecx, al` to `mov cl, 1; nop` (always the public address) and `je` to `jmp` (skip the link check). The disassembly, the HCI evidence and how to re-take the windows for another build: [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
+Like BlueToolFixup, the plugin routes the kernel's `_cs_validate_page` and looks at every page of `/usr/sbin/bluetoothd` as it is loaded. A page is patched only if the kernel is Tahoe, the file path matches, and the page holds the masked byte window around the patch site. The two patches are `movzx ecx, al` to `mov cl, 1; nop` (always the public address) and `je` to `jmp` (skip the link check). The disassembly, the HCI evidence and how to re-take the windows for another build: [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
 
 ## Credits
 

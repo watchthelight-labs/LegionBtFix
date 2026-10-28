@@ -1,5 +1,5 @@
 // <wtl> project: legionbtfix | file: src/LegionBtFix.cpp | author: watchthelight </wtl>
-// LegionBtFix: a Lilu plugin that patches single instructions of macOS Tahoe 26.7.1 (25G241) and 26.7.2 (25G332) /usr/sbin/bluetoothd in
+// LegionBtFix: a Lilu plugin that patches single instructions of macOS Tahoe /usr/sbin/bluetoothd in
 // memory, as its pages are loaded, to work around two MT7925 controller behaviours bluetoothd does not expect.
 //
 // Patch 1, LE own address. Why (the HCI trace in docs/HOW-IT-WORKS.md): bluetoothd sends the legacy LE
@@ -28,18 +28,15 @@
 //     100457c50  je     0x100457c77          74 25      ->   jmp 0x100457c77   eb 25
 // A non-zero HCI status is still handled inside 0x10044fe4e, which logs it and stores nothing.
 //
-// Gating. Each patch is only applied to a page that passes all of:
-//   * the vnode path is /usr/sbin/bluetoothd and the kernel is Tahoe 25.x (Lilu min/max kernel),
-//   * the bytes at the patch's in-page offset match its window exactly where the patched bytes are not (call and
-//     stack displacements, which change with every build, are part of the exact match too; the patched bytes may be
-//     either the original or the patched form, so an already patched page is recognised and left alone),
-//   * the SHA-1 of the whole 4 KB page equals the one taken from that build's bluetoothd (25G241: fat file pages
-//     0x6d3000 and 0x45b000; 25G332: 0x6d3000 and 0x45c000; no page holds a BlueToolFixup pattern, so the hash is of
-//     untouched bytes).
-// The addresses above are 25G241's. In 25G332 the same instructions sit 0x1b0 lower (address) and 0x4f0 higher
-// (clock); only call and RIP-relative displacements differ.
-// Any other build fails one of those and the plugin does nothing. Boot-arg -legionbtfixoff disables it entirely,
-// -legionbtfixnoaddr and -legionbtfixnoclock disable one patch each.
+// Gating. Each patch is applied only where all of these hold:
+//   * the kernel is Tahoe 25.x (Lilu min/max kernel) and the page belongs to /usr/sbin/bluetoothd (vn_getpath);
+//   * the page holds the patch's 43 or 51 byte window, with only the call displacements, the stack slot, the je
+//     distance and the RIP-relative log handle masked (they change with every build). The patched bytes may be the
+//     original or the patched form, so an already patched page is recognised and left alone.
+// The addresses above are from 25G241. The same masked windows match exactly once in 25G241's and 25G332's bluetoothd
+// and nowhere else in either file, so the plugin carries no per-build table.
+// A build whose code around either site changed matches nothing, and the plugin does nothing. Boot-arg
+// -legionbtfixoff disables it entirely, -legionbtfixnoaddr and -legionbtfixnoclock disable one patch each.
 //
 // Adapted from BlueToolFixup.cpp (BrcmPatchRAM/BlueToolFixup.cpp, created by
 // Dhinak G, part of acidanthera/BrcmPatchRAM, GNU General Public License v2): the _cs_validate_page route, the
@@ -52,18 +49,18 @@
 #include <Headers/kern_user.hpp>
 #include <Headers/kern_util.hpp>
 #include <Headers/kern_version.hpp>
-#include <libkern/crypto/sha1.h>
 
 #define MODULE_SHORT "lbtfx"
 
 namespace {
 constexpr char kPath[] = "/usr/sbin/bluetoothd";
 constexpr size_t kPage = 4096;
+constexpr uint8_t _ = 0;   // wildcard in a mask
 
-// Patch 1: 25G241 x86_64, 0x1006cfca2..0x1006cfccc
+// Patch 1, LE own address. Call target and stack slot vary between builds and are masked; the rest is matched exactly.
 const uint8_t kAddrWindow[43] = {
     0x48, 0x89, 0xdf,                         // mov    rdi, rbx
-    0xe8, 0x2e, 0xa3, 0x01, 0x00,             // call   0x1006e9fd8 (own-address choice)
+    0xe8, 0x2e, 0xa3, 0x01, 0x00,             // call   <own-address choice>
     0xb9, 0xff, 0x00, 0x00, 0x00,             // mov    ecx, 0xff
     0x89, 0x4c, 0x24, 0x08,                   // mov    [rsp+8], ecx
     0x89, 0x0c, 0x24,                         // mov    [rsp], ecx
@@ -74,92 +71,79 @@ const uint8_t kAddrWindow[43] = {
     0x44, 0x89, 0xe6,                         // mov    esi, r12d
     0x8b, 0x95, 0xe4, 0xfe, 0xff, 0xff,       // mov    edx, [rbp-0x11c] (initPHYs)
 };
+const uint8_t kAddrMask[43] = {
+    1, 1, 1, 1, _, _, _, _, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, _, _, _, _,
+};
 const uint8_t kAddrPatched[3] = {0xb1, 0x01, 0x90};   // mov cl, 1 ; nop
 
-// SHA-1 of the untouched page (fat file offset 0x6d3000)
-const uint8_t kAddrPageSha1[SHA_DIGEST_LENGTH] = {
-    0x27, 0xef, 0x9c, 0xab, 0xbb, 0x1e, 0xa3, 0xe6, 0x11, 0x58,
-    0xf5, 0xa7, 0x58, 0xf2, 0x79, 0x08, 0xfa, 0xb3, 0x70, 0x7b,
-};
-
-// Patch 2: 25G241 x86_64, 0x100457c29..0x100457c5b
+// Patch 2, BT clock. The three calls, the je distance and the log handle vary between builds and are masked.
 const uint8_t kClockWindow[51] = {
     0x48, 0x8d, 0x7d, 0xef,                   // lea    rdi, [rbp-0x11]
     0xc6, 0x07, 0x00,                         // mov    byte [rdi], 0
-    0xe8, 0x05, 0x43, 0xe6, 0xff,             // call   0x1002bbf3a (lock)
+    0xe8, 0x05, 0x43, 0xe6, 0xff,             // call   <lock>
     0x48, 0x8b, 0x7b, 0x20,                   // mov    rdi, [rbx+0x20] (link from the reply handle)
     0x4c, 0x89, 0xf6,                         // mov    rsi, r14
-    0xe8, 0x6f, 0x7c, 0xd0, 0xff,             // call   0x10015f8b0 (link check, 0x515 for no link)
+    0xe8, 0x6f, 0x7c, 0xd0, 0xff,             // call   <link check, 0x515 for no link>
     0x41, 0x89, 0xc6,                         // mov    r14d, eax
     0x48, 0x8d, 0x7d, 0xef,                   // lea    rdi, [rbp-0x11]
-    0xe8, 0xfb, 0x42, 0xe6, 0xff,             // call   0x1002bbf48 (unlock)
+    0xe8, 0xfb, 0x42, 0xe6, 0xff,             // call   <unlock>
     0x45, 0x85, 0xf6,                         // test   r14d, r14d
-    0x74, 0x25,                               // je     0x100457c77  <- patched
+    0x74, 0x25,                               // je     <store the clock>  <- opcode patched
     0x48, 0x8d, 0x05, 0xff, 0xac, 0x6f, 0x00, // lea    rax, [log handle]
     0x48, 0x8b, 0x18,                         // mov    rbx, [rax]
 };
-const uint8_t kClockPatched[1] = {0xeb};   // jmp short
-
-// SHA-1 of the untouched page (fat file offset 0x45b000)
-const uint8_t kClockPageSha1[SHA_DIGEST_LENGTH] = {
-    0x8a, 0xc8, 0x1e, 0x18, 0xd6, 0xb1, 0xe0, 0x39, 0xdd, 0x29,
-    0x68, 0x26, 0xb8, 0xeb, 0x49, 0x87, 0xb8, 0x30, 0x24, 0x81,
+const uint8_t kClockMask[51] = {
+    1, 1, 1, 1, 1, 1, 1, 1, _, _, _, _, 1, 1, 1, 1, 1, 1, 1, 1, _, _, _, _, 1, 1,
+    1, 1, 1, 1, 1, 1, _, _, _, _, 1, 1, 1, 1, _, 1, 1, 1, _, _, _, _, 1, 1, 1,
 };
-
-// Patch 2 in 25G332 (fat file 0x45c119): the same instructions with new call and log-handle displacements
-const uint8_t kClockWindow25G332[51] = {
-    0x48, 0x8d, 0x7d, 0xef, 0xc6, 0x07, 0x00, 0xe8, 0xb5, 0x42, 0xe6, 0xff, 0x48, 0x8b, 0x7b, 0x20, 0x4c,
-    0x89, 0xf6, 0xe8, 0xcf, 0x7b, 0xd0, 0xff, 0x41, 0x89, 0xc6, 0x48, 0x8d, 0x7d, 0xef, 0xe8, 0xab, 0x42,
-    0xe6, 0xff, 0x45, 0x85, 0xf6, 0x74, 0x25, 0x48, 0x8d, 0x05, 0x0f, 0xa8, 0x6f, 0x00, 0x48, 0x8b, 0x18,
-};
-
-// SHA-1 of the untouched 25G332 pages (fat file offsets 0x6d3000 and 0x45c000); patch 1's window is unchanged
-const uint8_t kAddrPageSha1_25G332[SHA_DIGEST_LENGTH] = {
-    0xd9, 0x82, 0x9c, 0x8e, 0xef, 0x61, 0xd4, 0xf9, 0x5c, 0xf1,
-    0x31, 0xbc, 0x34, 0xf1, 0x59, 0xab, 0x98, 0xbf, 0xb1, 0x75,
-};
-const uint8_t kClockPageSha1_25G332[SHA_DIGEST_LENGTH] = {
-    0xbb, 0xde, 0x49, 0x68, 0x3d, 0x5c, 0x50, 0xbd, 0x7e, 0x31,
-    0xeb, 0x72, 0x65, 0xa5, 0x1a, 0xd2, 0x91, 0x25, 0x4c, 0x22,
-};
+const uint8_t kClockPatched[1] = {0xeb};   // jmp short, same distance
 
 struct Patch {
-    const char *build;
     const char *what;            // log text
-    size_t windowOff;            // in-page offset of the window
     const uint8_t *window;
+    const uint8_t *mask;
     size_t windowLen;
+    size_t anchorOff;            // a run of exact bytes searched first, cheap for the pages that are not bluetoothd
+    size_t anchorLen;
     size_t patchOff;             // patched bytes inside the window
     const uint8_t *patched;
     size_t patchedLen;
-    const uint8_t *pageSha1;
     bool enabled;
     bool done;
 };
 
 Patch patches[] = {
-    {"25G241", "LE own address forced to public", 0xca2, kAddrWindow, sizeof(kAddrWindow), 20, kAddrPatched,
-     sizeof(kAddrPatched), kAddrPageSha1, true, false},
-    {"25G241", "BT clock accepted without link lookup", 0xc29, kClockWindow, sizeof(kClockWindow), 39, kClockPatched,
-     sizeof(kClockPatched), kClockPageSha1, true, false},
-    {"25G332", "LE own address forced to public", 0xaf2, kAddrWindow, sizeof(kAddrWindow), 20, kAddrPatched,
-     sizeof(kAddrPatched), kAddrPageSha1_25G332, true, false},
-    {"25G332", "BT clock accepted without link lookup", 0x119, kClockWindow25G332, sizeof(kClockWindow25G332), 39,
-     kClockPatched, sizeof(kClockPatched), kClockPageSha1_25G332, true, false},
+    {"LE own address forced to public", kAddrWindow, kAddrMask, sizeof(kAddrWindow), 8, 12, 20, kAddrPatched,
+     sizeof(kAddrPatched), true, false},
+    {"BT clock accepted without link lookup", kClockWindow, kClockMask, sizeof(kClockWindow), 24, 8, 39, kClockPatched,
+     sizeof(kClockPatched), true, false},
 };
 
 mach_vm_address_t orig_cs_validate {};
 
-// The window with the patched bytes masked out; true for an untouched (orig) or already patched page.
+// The masked window, with the patched bytes either original or already patched.
 bool windowMatches(const Patch &pt, const uint8_t *p, bool &alreadyPatched) {
     for (size_t i = 0; i < pt.windowLen; i++) {
         if (i >= pt.patchOff && i < pt.patchOff + pt.patchedLen)
             continue;
-        if (p[i] != pt.window[i])
+        if (pt.mask[i] && p[i] != pt.window[i])
             return false;
     }
     alreadyPatched = memcmp(p + pt.patchOff, pt.patched, pt.patchedLen) == 0;
     return alreadyPatched || memcmp(p + pt.patchOff, pt.window + pt.patchOff, pt.patchedLen) == 0;
+}
+
+// Offset of the window in the page, or -1. A window that crosses a page boundary is not found.
+long findWindow(const Patch &pt, const uint8_t *page, bool &alreadyPatched) {
+    const uint8_t *anchor = pt.window + pt.anchorOff;
+    for (size_t at = pt.anchorOff; at + pt.windowLen - pt.anchorOff <= kPage; at++) {
+        if (page[at] != anchor[0] || memcmp(page + at, anchor, pt.anchorLen) != 0)
+            continue;
+        if (windowMatches(pt, page + at - pt.anchorOff, alreadyPatched))
+            return static_cast<long>(at - pt.anchorOff);
+    }
+    return -1;
 }
 
 // As BlueToolFixup's patched_cs_validate_page: let the kernel validate first, then patch the page contents.
@@ -169,45 +153,38 @@ void patched_cs_validate_page(vnode_t vp, memory_object_t pager, memory_object_o
     auto page = static_cast<uint8_t *>(const_cast<void *>(data));
     if (UNLIKELY(!page))
         return;
+    bool pathChecked = false;
     for (auto &pt : patches) {
         bool already = false;
-        // cheap checks first: this runs for every code page the system loads
-        if (LIKELY(!pt.enabled || !windowMatches(pt, page + pt.windowOff, already)))
+        long off = pt.enabled ? findWindow(pt, page, already) : -1;
+        if (LIKELY(off < 0))
             continue;
-        char path[PATH_MAX];
-        int pathlen = PATH_MAX;
-        if (vn_getpath(vp, path, &pathlen) != 0 || strcmp(path, kPath) != 0)
-            continue;
+        if (!pathChecked) {
+            char path[PATH_MAX];
+            int pathlen = PATH_MAX;
+            if (vn_getpath(vp, path, &pathlen) != 0 || strcmp(path, kPath) != 0)
+                return;
+            pathChecked = true;
+        }
         if (already) {
             DBGLOG(MODULE_SHORT, "bluetoothd page at %llx already patched", (unsigned long long)page_offset);
             continue;
         }
-        SHA1_CTX ctx;
-        uint8_t digest[SHA_DIGEST_LENGTH];
-        SHA1Init(&ctx);
-        SHA1Update(&ctx, page, kPage);
-        SHA1Final(digest, &ctx);
-        if (memcmp(digest, pt.pageSha1, sizeof(digest)) != 0) {
-            SYSLOG(MODULE_SHORT, "bluetoothd page at %llx: pattern found but page hash differs, not patching",
-                   (unsigned long long)page_offset);
-            continue;
-        }
-        memcpy(page + pt.windowOff + pt.patchOff, pt.patched, pt.patchedLen);
+        memcpy(page + off + pt.patchOff, pt.patched, pt.patchedLen);
         if (!pt.done) {
             pt.done = true;
-            SYSLOG(MODULE_SHORT, "bluetoothd %s: %s (page %llx)", pt.build, pt.what, (unsigned long long)page_offset);
+            SYSLOG(MODULE_SHORT, "bluetoothd: %s (page %llx +%lx)", pt.what, (unsigned long long)page_offset, off);
         }
     }
 }
 
 void pluginStart() {
     SYSLOG(MODULE_SHORT, "start");
-    const bool addr = !checkKernelArgument("-legionbtfixnoaddr"), clock = !checkKernelArgument("-legionbtfixnoclock");
-    for (auto &pt : patches)
-        pt.enabled = pt.window == kAddrWindow ? addr : clock;
+    patches[0].enabled = !checkKernelArgument("-legionbtfixnoaddr");
+    patches[1].enabled = !checkKernelArgument("-legionbtfixnoclock");
     for (auto &pt : patches)
         if (!pt.enabled)
-            SYSLOG(MODULE_SHORT, "disabled by boot-arg: %s %s", pt.build, pt.what);
+            SYSLOG(MODULE_SHORT, "disabled by boot-arg: %s", pt.what);
     lilu.onPatcherLoadForce([](void *, KernelPatcher &patcher) {
         KernelPatcher::RouteRequest csRoute("_cs_validate_page", patched_cs_validate_page, orig_cs_validate);
         if (!patcher.routeMultipleLong(KernelPatcher::KernelID, &csRoute, 1))
