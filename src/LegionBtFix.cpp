@@ -1,5 +1,5 @@
 // <wtl> project: legionbtfix | file: src/LegionBtFix.cpp | author: watchthelight </wtl>
-// LegionBtFix: a Lilu plugin that patches single instructions of macOS Tahoe 26.7.1 (25G241) /usr/sbin/bluetoothd in
+// LegionBtFix: a Lilu plugin that patches single instructions of macOS Tahoe 26.7.1 (25G241) and 26.7.2 (25G332) /usr/sbin/bluetoothd in
 // memory, as its pages are loaded, to work around two MT7925 controller behaviours bluetoothd does not expect.
 //
 // Patch 1, LE own address. Why (the HCI trace in docs/HOW-IT-WORKS.md): bluetoothd sends the legacy LE
@@ -33,9 +33,11 @@
 //   * the bytes at the patch's in-page offset match its window exactly where the patched bytes are not (call and
 //     stack displacements, which change with every build, are part of the exact match too; the patched bytes may be
 //     either the original or the patched form, so an already patched page is recognised and left alone),
-//   * the SHA-1 of the whole 4 KB page equals the one taken from 25G241's bluetoothd (pages at x86_64 slice offsets
-//     0x6cf000 and 0x457000, fat file 0x6d3000 and 0x45b000; neither page holds a BlueToolFixup pattern, so the hash
-//     is of untouched bytes).
+//   * the SHA-1 of the whole 4 KB page equals the one taken from that build's bluetoothd (25G241: fat file pages
+//     0x6d3000 and 0x45b000; 25G332: 0x6d3000 and 0x45c000; no page holds a BlueToolFixup pattern, so the hash is of
+//     untouched bytes).
+// The addresses above are 25G241's. In 25G332 the same instructions sit 0x1b0 lower (address) and 0x4f0 higher
+// (clock); only call and RIP-relative displacements differ.
 // Any other build fails one of those and the plugin does nothing. Boot-arg -legionbtfixoff disables it entirely,
 // -legionbtfixnoaddr and -legionbtfixnoclock disable one patch each.
 //
@@ -104,7 +106,25 @@ const uint8_t kClockPageSha1[SHA_DIGEST_LENGTH] = {
     0x68, 0x26, 0xb8, 0xeb, 0x49, 0x87, 0xb8, 0x30, 0x24, 0x81,
 };
 
+// Patch 2 in 25G332 (fat file 0x45c119): the same instructions with new call and log-handle displacements
+const uint8_t kClockWindow25G332[51] = {
+    0x48, 0x8d, 0x7d, 0xef, 0xc6, 0x07, 0x00, 0xe8, 0xb5, 0x42, 0xe6, 0xff, 0x48, 0x8b, 0x7b, 0x20, 0x4c,
+    0x89, 0xf6, 0xe8, 0xcf, 0x7b, 0xd0, 0xff, 0x41, 0x89, 0xc6, 0x48, 0x8d, 0x7d, 0xef, 0xe8, 0xab, 0x42,
+    0xe6, 0xff, 0x45, 0x85, 0xf6, 0x74, 0x25, 0x48, 0x8d, 0x05, 0x0f, 0xa8, 0x6f, 0x00, 0x48, 0x8b, 0x18,
+};
+
+// SHA-1 of the untouched 25G332 pages (fat file offsets 0x6d3000 and 0x45c000); patch 1's window is unchanged
+const uint8_t kAddrPageSha1_25G332[SHA_DIGEST_LENGTH] = {
+    0xd9, 0x82, 0x9c, 0x8e, 0xef, 0x61, 0xd4, 0xf9, 0x5c, 0xf1,
+    0x31, 0xbc, 0x34, 0xf1, 0x59, 0xab, 0x98, 0xbf, 0xb1, 0x75,
+};
+const uint8_t kClockPageSha1_25G332[SHA_DIGEST_LENGTH] = {
+    0xbb, 0xde, 0x49, 0x68, 0x3d, 0x5c, 0x50, 0xbd, 0x7e, 0x31,
+    0xeb, 0x72, 0x65, 0xa5, 0x1a, 0xd2, 0x91, 0x25, 0x4c, 0x22,
+};
+
 struct Patch {
+    const char *build;
     const char *what;            // log text
     size_t windowOff;            // in-page offset of the window
     const uint8_t *window;
@@ -118,10 +138,14 @@ struct Patch {
 };
 
 Patch patches[] = {
-    {"LE own address forced to public", 0xca2, kAddrWindow, sizeof(kAddrWindow), 20, kAddrPatched,
+    {"25G241", "LE own address forced to public", 0xca2, kAddrWindow, sizeof(kAddrWindow), 20, kAddrPatched,
      sizeof(kAddrPatched), kAddrPageSha1, true, false},
-    {"BT clock accepted without link lookup", 0xc29, kClockWindow, sizeof(kClockWindow), 39, kClockPatched,
+    {"25G241", "BT clock accepted without link lookup", 0xc29, kClockWindow, sizeof(kClockWindow), 39, kClockPatched,
      sizeof(kClockPatched), kClockPageSha1, true, false},
+    {"25G332", "LE own address forced to public", 0xaf2, kAddrWindow, sizeof(kAddrWindow), 20, kAddrPatched,
+     sizeof(kAddrPatched), kAddrPageSha1_25G332, true, false},
+    {"25G332", "BT clock accepted without link lookup", 0x119, kClockWindow25G332, sizeof(kClockWindow25G332), 39,
+     kClockPatched, sizeof(kClockPatched), kClockPageSha1_25G332, true, false},
 };
 
 mach_vm_address_t orig_cs_validate {};
@@ -171,18 +195,19 @@ void patched_cs_validate_page(vnode_t vp, memory_object_t pager, memory_object_o
         memcpy(page + pt.windowOff + pt.patchOff, pt.patched, pt.patchedLen);
         if (!pt.done) {
             pt.done = true;
-            SYSLOG(MODULE_SHORT, "bluetoothd 25G241: %s (page %llx)", pt.what, (unsigned long long)page_offset);
+            SYSLOG(MODULE_SHORT, "bluetoothd %s: %s (page %llx)", pt.build, pt.what, (unsigned long long)page_offset);
         }
     }
 }
 
 void pluginStart() {
     SYSLOG(MODULE_SHORT, "start");
-    patches[0].enabled = !checkKernelArgument("-legionbtfixnoaddr");
-    patches[1].enabled = !checkKernelArgument("-legionbtfixnoclock");
+    const bool addr = !checkKernelArgument("-legionbtfixnoaddr"), clock = !checkKernelArgument("-legionbtfixnoclock");
+    for (auto &pt : patches)
+        pt.enabled = pt.window == kAddrWindow ? addr : clock;
     for (auto &pt : patches)
         if (!pt.enabled)
-            SYSLOG(MODULE_SHORT, "disabled by boot-arg: %s", pt.what);
+            SYSLOG(MODULE_SHORT, "disabled by boot-arg: %s %s", pt.build, pt.what);
     lilu.onPatcherLoadForce([](void *, KernelPatcher &patcher) {
         KernelPatcher::RouteRequest csRoute("_cs_validate_page", patched_cs_validate_page, orig_cs_validate);
         if (!patcher.routeMultipleLong(KernelPatcher::KernelID, &csRoute, 1))

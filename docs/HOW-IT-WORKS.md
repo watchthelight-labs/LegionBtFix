@@ -52,9 +52,15 @@ Each patch is applied only to a page that passes all of:
 
 - the vnode path is `/usr/sbin/bluetoothd` and the kernel is Tahoe 25.x (Lilu min and max kernel);
 - the bytes at the patch's in-page offset match its window exactly where the patched bytes are not; call and stack displacements, which change with every build, are part of the exact match. The patched bytes may be either the original or the patched form, so an already patched page is recognised and left alone;
-- the SHA-1 of the whole 4 KB page equals the one taken from 25G241. Neither page holds a BlueToolFixup pattern (vendor check, chipset checks, NVRAM check, address check), so the hash is of untouched bytes whatever order the two plugins run in.
+- the SHA-1 of the whole 4 KB page equals the one taken from 25G241 or 25G332. No such page holds a BlueToolFixup pattern (vendor check, chipset checks, NVRAM check, address check), so the hash is of untouched bytes whatever order the two plugins run in.
 
 Any other build fails one of those and the plugin does nothing. If only the window matches, it logs `page hash differs` so you know a re-take is needed.
+
+## 25G332 (macOS 26.7.2)
+
+`bluetoothd` from Apple's full 25G332 OTA, file sha256 `c7eeb8ebd2cdbc43545453936d0ef19b5a61fd1f32cb99a4bf9208d4cd2031b5`, same size as 25G241's (23,555,568 bytes). The address window is unchanged byte for byte and sits at fat offset 0x6d3af2 (page 0x6d3000, in-page 0xaf2). The clock window is at 0x45c119 (page 0x45c000, in-page 0x119). Only the three call displacements and the RIP-relative log handle differ there, the called functions start with the same bytes as in 25G241, and the `je` still jumps 0x25 ahead. The patched bytes and offsets inside each window are the same as in 25G241.
+
+Reading `/usr/sbin/bluetoothd` on a running system with the plugin loaded can return the patched page, because the page cache holds the page as `_cs_validate_page` left it. Hash a copy from an installer or OTA, or put the original bytes back before hashing.
 
 ## Re-taking the windows for another build
 
