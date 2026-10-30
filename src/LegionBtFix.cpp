@@ -37,6 +37,7 @@
 // and nowhere else in either file, so the plugin carries no per-build table.
 // A build whose code around either site changed matches nothing, and the plugin does nothing. Boot-arg
 // -legionbtfixoff disables it entirely, -legionbtfixnoaddr and -legionbtfixnoclock disable one patch each.
+// Patches 3 and 4 (LE ready gate, below) are opt-in: they apply only with -legionbtfixlewait.
 //
 // Adapted from BlueToolFixup.cpp (BrcmPatchRAM/BlueToolFixup.cpp, created by
 // Dhinak G, part of acidanthera/BrcmPatchRAM, GNU General Public License v2): the _cs_validate_page route, the
@@ -99,6 +100,39 @@ const uint8_t kClockMask[51] = {
 };
 const uint8_t kClockPatched[1] = {0xeb};   // jmp short, same distance
 
+// Patch 3 and 4 (opt-in, -legionbtfixlewait): bluetoothd's LE connection "ready" gate (probe state LE_READY_WAIT_FOR_PHY /
+// LE_READY_WAIT_FOR_LENGTH, 25G332 function at 0x100209f45). After a link comes up it parks the connection until an LE PHY
+// Update and an LE Data Length Change event have arrived and only then sends its first message. A controller that never sends
+// those events leaves the connection parked (BLE HID pairing stalls). The function picks the wait state from two conditions:
+//     100209f65  cmp   byte [rbx+0x99], 0      80 bb 99 00 00 00 00   phy event seen?
+//     100209f6c  je    <state 4, wait-for-phy>  0f 84 a4 00 00 00
+//     100209f7b  cmp   dword [rbx+0x88], 1      83 bb 88 00 00 00 01   data length probe complete?
+//     100209f82  jne   <state 3, wait-for-length> 0f 85 9a 00 00 00
+// Each jump becomes "jo" (0f 80, same length, OF is clear after test/cmp against a small value so it is never taken), which
+// falls through to the code that runs once the events have arrived. Nothing else changes.
+const uint8_t kPhyWindow[22] = {
+    0x85, 0xd2, 0x74, 0x0d,                   // test   edx, edx ; je +0xd
+    0x80, 0xbb, 0x99, 0x00, 0x00, 0x00, 0x00, // cmp    byte [rbx+0x99], 0
+    0x0f, 0x84, 0xa4, 0x00, 0x00, 0x00,       // je     <wait-for-phy>  <- opcode patched
+    0x40, 0x84, 0xf6,                         // test   sil, sil
+    0x0f, 0x84,                               // je     <return>
+};
+const uint8_t kPhyMask[22] = {
+    1, 1, 1, _, 1, 1, 1, 1, 1, 1, 1, 1, 1, _, _, _, _, 1, 1, 1, 1, 1,
+};
+const uint8_t kLenWindow[32] = {
+    0x83, 0xbb, 0x88, 0x00, 0x00, 0x00, 0x01, // cmp    dword [rbx+0x88], 1
+    0x0f, 0x85, 0x9a, 0x00, 0x00, 0x00,       // jne    <wait-for-length>  <- opcode patched
+    0x80, 0x7b, 0x7d, 0x01,                   // cmp    byte [rbx+0x7d], 1
+    0x0f, 0x85, 0xb3, 0x00, 0x00, 0x00,       // jne    <direct continue>
+    0x80, 0xbb, 0x64, 0x01, 0x00, 0x00, 0x01, // cmp    byte [rbx+0x164], 1
+    0x0f, 0x85,                               // jne    <direct continue>
+};
+const uint8_t kLenMask[32] = {
+    1, 1, 1, 1, 1, 1, 1, 1, 1, _, _, _, _, 1, 1, 1, 1, 1, 1, _, _, _, _, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+};
+const uint8_t kJoPatched[2] = {0x0f, 0x80};   // jo rel32, never taken
+
 struct Patch {
     const char *what;            // log text
     const uint8_t *window;
@@ -118,6 +152,10 @@ Patch patches[] = {
      sizeof(kAddrPatched), true, false},
     {"BT clock accepted without link lookup", kClockWindow, kClockMask, sizeof(kClockWindow), 24, 8, 39, kClockPatched,
      sizeof(kClockPatched), true, false},
+    {"LE ready gate: no wait for PHY update", kPhyWindow, kPhyMask, sizeof(kPhyWindow), 4, 7, 11, kJoPatched,
+     sizeof(kJoPatched), false, false},
+    {"LE ready gate: no wait for data length", kLenWindow, kLenMask, sizeof(kLenWindow), 0, 7, 7, kJoPatched,
+     sizeof(kJoPatched), false, false},
 };
 
 mach_vm_address_t orig_cs_validate {};
@@ -182,9 +220,13 @@ void pluginStart() {
     SYSLOG(MODULE_SHORT, "start");
     patches[0].enabled = !checkKernelArgument("-legionbtfixnoaddr");
     patches[1].enabled = !checkKernelArgument("-legionbtfixnoclock");
-    for (auto &pt : patches)
-        if (!pt.enabled)
-            SYSLOG(MODULE_SHORT, "disabled by boot-arg: %s", pt.what);
+    // Opt-in: not part of the proven default set.
+    patches[2].enabled = patches[3].enabled = checkKernelArgument("-legionbtfixlewait");
+    if (patches[2].enabled)
+        SYSLOG(MODULE_SHORT, "opt-in LE ready gate patches on (-legionbtfixlewait)");
+    for (size_t i = 0; i < 2; i++)
+        if (!patches[i].enabled)
+            SYSLOG(MODULE_SHORT, "disabled by boot-arg: %s", patches[i].what);
     lilu.onPatcherLoadForce([](void *, KernelPatcher &patcher) {
         KernelPatcher::RouteRequest csRoute("_cs_validate_page", patched_cs_validate_page, orig_cs_validate);
         if (!patcher.routeMultipleLong(KernelPatcher::KernelID, &csRoute, 1))

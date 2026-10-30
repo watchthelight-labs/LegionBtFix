@@ -76,6 +76,7 @@ It makes `bluetoothd` write HCI traces with audio payloads to `/var/root/Library
 | `-legionbtfixoff` | plugin disabled |
 | `-legionbtfixnoaddr` | skip the LE own address patch |
 | `-legionbtfixnoclock` | skip the BT clock patch (for an A/B test) |
+| `-legionbtfixlewait` | opt-in: skip bluetoothd's wait for an LE PHY update and an LE data length event before a new LE link is used (two more patches, off by default, not booted yet) |
 | `-legionbtfixdbg` | debug logging, DEBUG build only |
 
 ## Building
