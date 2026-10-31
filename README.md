@@ -1,4 +1,6 @@
-# LegionBtFix
+# WTLLegionBtFix
+
+Renamed from `LegionBtFix` on 2026-10-31; the kext is still `LegionBtFix.kext`. Old links redirect here.
 
 A Lilu plugin that patches two instructions of `/usr/sbin/bluetoothd` in memory on macOS Tahoe (tested on 26.7.1 25G241 and 26.7.2 25G332), for two things the MediaTek MT7925 Bluetooth controller does that `bluetoothd` does not expect. Nothing on disk changes. It finds both spots by the code around them, with the call targets and stack offsets that move between builds masked out, so a new Tahoe update needs no new release as long as that code stays the same. If it changes, the plugin patches nothing.
 
